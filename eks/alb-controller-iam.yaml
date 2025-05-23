@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM Role and Policy for AWS Load Balancer Controller on EKS
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Name of your EKS cluster
+
+  OIDCProviderURL:
+    Type: String
+    Description: The OIDC provider URL without "https://" (e.g., oidc.eks.us-west-1.amazonaws.com/id/18DB40D176116D84A6FD4D3E0C520E5A)
+
+Resources:
+  ALBControllerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "eks-${ClusterName}-alb-ingress-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/${OIDCProviderURL}"
+            Action:
+              - sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                # This must be a static key, can't be dynamically built
+                oidc.eks.us-west-1.amazonaws.com/id/18DB40D176116D84A6FD4D3E0C520E5A:sub: "system:serviceaccount:kube-system:aws-load-balancer-controller"
+      Description: IAM role for AWS Load Balancer Controller
+      MaxSessionDuration: 3600
+
+  ALBControllerPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "ALBIngressControllerPolicy-${ClusterName}"
+      Roles:
+        - !Ref ALBControllerRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - elasticloadbalancing:*
+              - ec2:Describe*
+              - iam:ListServerCertificates
+              - iam:GetServerCertificate
+              - waf:GetWebACL
+              - wafv2:GetWebACL
+              - wafv2:AssociateWebACL
+              - wafv2:DisassociateWebACL
+              - acm:ListCertificates
+              - acm:DescribeCertificate
+              - tag:GetResources
+              - tag:TagResources
+              - cognito-idp:DescribeUserPoolClient
+            Resource: "*"
+
+Outputs:
+  RoleName:
+    Description: IAM Role Name
+    Value: !Ref ALBControllerRole
+
+  RoleArn:
+    Description: IAM Role ARN
+    Value: !GetAtt ALBControllerRole.Arn
