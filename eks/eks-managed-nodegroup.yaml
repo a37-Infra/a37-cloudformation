@@ -1,0 +1,123 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EKS cluster stack for production use. Assumes VPC and subnets are pre-provisioned
+  and passed in as parameters. Sets up EKS control plane, node groups, IAM roles, security groups.
+
+Parameters:
+  ClusterName:
+    Type: String
+  VpcId:
+    Type: String
+  PrivateSubnet1:
+    Type: String
+  PrivateSubnet2:
+    Type: String
+
+Resources:
+
+  EKSClusterSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow EKS Control Plane Communication
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClusterName}-eks-cluster-sg"
+
+  NodeSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Node Group traffic
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: -1
+          SourceSecurityGroupId: !Ref EKSClusterSG
+      Tags:
+        - Key: Name
+          Value: !Sub "${ClusterName}-eks-node-sg"
+
+  ClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: eks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+  EKSCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      Version: "1.29"
+      RoleArn: !GetAtt ClusterRole.Arn
+      ResourcesVpcConfig:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !Ref EKSClusterSG
+        EndpointPrivateAccess: true
+        EndpointPublicAccess: true
+      KubernetesNetworkConfig:
+        ServiceIpv4Cidr: 172.20.0.0/16
+
+  NodeInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+
+  NodeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref NodeInstanceRole
+
+  NodeGroup:
+    Type: AWS::EKS::Nodegroup
+    DependsOn: EKSCluster
+    Properties:
+      ClusterName: !Ref ClusterName
+      NodegroupName: !Sub "${ClusterName}-managed-nodegroup"
+      ScalingConfig:
+        MinSize: 2
+        DesiredSize: 3
+        MaxSize: 6
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      NodeRole: !GetAtt NodeInstanceRole.Arn
+      AmiType: AL2_x86_64
+      InstanceTypes:
+        - t3.medium
+      DiskSize: 20
+      Tags:
+        Name: !Sub "${ClusterName}-managed-nodegroup"
+Outputs:
+  ClusterName:
+    Value: !Ref ClusterName
+  EKSClusterArn:
+    Value: !GetAtt EKSCluster.Arn
+  EKSClusterEndpoint:
+    Value: !GetAtt EKSCluster.Endpoint
+  NodeRoleArn:
+    Value: !GetAtt NodeInstanceRole.Arn
